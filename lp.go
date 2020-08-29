@@ -157,12 +157,13 @@ func (l *lister) list() ([]*process, error) {
 }
 
 type process struct {
-	pid     int32
-	name    string
-	cmdline string
-	ppid    int32
-	pgid    int32
-	user    string
+	pid      int32
+	name     string
+	cmdline  string
+	ppid     int32
+	pgid     int32
+	nthreads int64
+	user     string
 }
 
 var errNotAProcess = errors.New("/proc dir is not a pid")
@@ -242,6 +243,11 @@ func (l *lister) parseStat(p *process, path string) error {
 			if err != nil {
 				return err
 			}
+		case 20: // num_threads
+			p.nthreads, err = parseInt64b(b)
+			if err != nil {
+				return err
+			}
 			// Done
 			return nil
 		}
@@ -308,6 +314,14 @@ func parseUint32b(b []byte) (uint32, error) {
 	return uint32(n), nil
 }
 
+func parseInt64b(b []byte) (int64, error) {
+	var s string
+	sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
+	sh.Data = (*reflect.SliceHeader)(unsafe.Pointer(&b)).Data
+	sh.Len = len(b)
+	return strconv.ParseInt(s, 10, 64)
+}
+
 type filter struct {
 	thisPID int32          // don't include our own PID
 	user    string         // only include this user
@@ -339,6 +353,7 @@ const (
 	colUser
 	colName
 	colPGID
+	colNThreads
 	colCmdline
 	numCols
 )
@@ -371,6 +386,10 @@ var colConfs = map[column]colConf{
 	colPGID: {
 		name: "pgid",
 		desc: "Process group ID",
+	},
+	colNThreads: {
+		name: "nthreads",
+		desc: "Number of threads in the process",
 	},
 	colCmdline: {
 		name:   "cmdline",
@@ -415,6 +434,7 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colUser, p.user},
 		{colName, p.name},
 		{colPGID, p.pgid},
+		{colNThreads, p.nthreads},
 		{colCmdline, p.cmdline},
 	} {
 		if cols.has(cell.col) {

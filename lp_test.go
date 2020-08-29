@@ -24,9 +24,10 @@ func TestListerParseStat(t *testing.T) {
 	}
 
 	want := &process{
-		name: "panel-6-indicat",
-		ppid: 1837,
-		pgid: 1689,
+		name:     "panel-6-indicat",
+		ppid:     1837,
+		pgid:     1689,
+		nthreads: 3,
 	}
 
 	if diff := cmp.Diff(p, want, cmp.AllowUnexported(process{})); diff != "" {
