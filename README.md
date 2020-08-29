@@ -2,7 +2,6 @@
 
 ## TODO (maybe)
 
-* Better -h listing all possible columns
 * Truncate long lines to terminal width
 * Running duration
 * capabilities

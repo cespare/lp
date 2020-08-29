@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"unsafe"
 )
 
@@ -29,6 +30,32 @@ func main() {
 		full     = flag.Bool("full", false, "Shorthand for -cols 'pid,ppid,user,cmdline'")
 		colsFlag = flag.String("cols", "", "List of columns to display (comma-separated)")
 	)
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, `lp: list processes
+
+Usage:
+
+  lp [flags]
+
+The flags are:
+
+`)
+		flag.PrintDefaults()
+		fmt.Fprint(os.Stderr, `
+lp prints out a table listing processes. The first row contains column headers
+and then each subsequent row corresponds to a process.
+
+By default, lp includes all processes belonging to the current user.
+With the -all flag, lp prints processes for all users.
+
+The default set of columns is just pid and process name. A larger set of
+commonly-used columns is enabled by using -full. The set of columns may be
+customized using -cols 'col1,col2,...'. The full set of available columns is:
+
+`)
+		printAllColumns()
+		fmt.Fprintln(os.Stderr)
+	}
 	flag.Parse()
 
 	var cols column
@@ -310,16 +337,47 @@ const (
 
 type colConf struct {
 	name   string
+	desc   string
 	string bool
 }
 
-var colConfs = [...]colConf{
-	colPID:     {name: "pid"},
-	colPPID:    {name: "ppid"},
-	colUser:    {name: "user", string: true},
-	colName:    {name: "name", string: true},
-	colPGID:    {name: "pgid"},
-	colCmdline: {name: "cmdline", string: true},
+var colConfs = map[column]colConf{
+	colPID: {
+		name: "pid",
+		desc: "Process ID",
+	},
+	colPPID: {
+		name: "ppid",
+		desc: "Parent process ID",
+	},
+	colUser: {
+		name:   "user",
+		desc:   "Username of the process owner",
+		string: true,
+	},
+	colName: {
+		name:   "name",
+		desc:   "Name of the command (as reported by /proc/[pid]/stat)",
+		string: true,
+	},
+	colPGID: {
+		name: "pgid",
+		desc: "Process group ID",
+	},
+	colCmdline: {
+		name:   "cmdline",
+		desc:   "Command line for the process",
+		string: true,
+	},
+}
+
+func printAllColumns() {
+	tw := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	for col := column(1); col < numCols; col <<= 1 {
+		cc := colConfs[col]
+		fmt.Fprintf(tw, "  %s\t%s\t\n", cc.name, cc.desc)
+	}
+	tw.Flush()
 }
 
 var colNames = make(map[string]column)
