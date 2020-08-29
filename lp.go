@@ -40,7 +40,7 @@ func main() {
 			colName = strings.TrimSpace(colName)
 			col, ok := colNames[colName]
 			if !ok {
-				log.Fatal("Unknown -col: %q", colName)
+				log.Fatalf("Unknown -col: %q", colName)
 			}
 			cols |= col
 		}
