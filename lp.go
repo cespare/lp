@@ -45,8 +45,9 @@ The flags are:
 lp prints out a table listing processes. The first row contains column headers
 and then each subsequent row corresponds to a process.
 
-By default, lp includes all processes belonging to the current user.
-With the -all flag, lp prints processes for all users.
+By default, lp includes all processes belonging to the current user except for
+the lp process itself. With the -all flag, lp prints all processes for all users,
+including the lp process.
 
 The default set of columns is just pid and process name. A larger set of
 commonly-used columns is enabled by using -full. The set of columns may be
@@ -79,6 +80,7 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 
 	f := new(filter)
 	if !*all {
+		f.thisPID = int32(os.Getpid())
 		u, err := user.Current()
 		if err != nil {
 			log.Fatal(err)
@@ -305,12 +307,16 @@ func parseUint32b(b []byte) (uint32, error) {
 }
 
 type filter struct {
-	user string
-	name *regexp.Regexp
-	cmd  *regexp.Regexp
+	thisPID int32          // don't include our own PID
+	user    string         // only include this user
+	name    *regexp.Regexp // only include processes matching this name
+	cmd     *regexp.Regexp // only include processes matching this cmdline
 }
 
 func (f *filter) include(p *process) bool {
+	if f.thisPID == p.pid {
+		return false
+	}
 	if f.user != "" && f.user != p.user {
 		return false
 	}

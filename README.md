@@ -12,7 +12,6 @@
 * rss (plus descendents?)
 * Total CPU time
 * Process state
-* Sorting by any column
 * Pstree view
   - Show all ancestors/descendents
 * JSON/CSV output?
