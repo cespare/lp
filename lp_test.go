@@ -26,6 +26,7 @@ func TestListerParseStat(t *testing.T) {
 	want := &process{
 		name: "panel-6-indicat",
 		ppid: 1837,
+		pgid: 1689,
 	}
 
 	if diff := cmp.Diff(p, want, cmp.AllowUnexported(process{})); diff != "" {
@@ -35,17 +36,17 @@ func TestListerParseStat(t *testing.T) {
 
 func TestTableWriter(t *testing.T) {
 	tw := newTableWriter(colPID | colName | colPPID)
-	tw.append([]string{"3", "abc", "123"})
-	tw.append([]string{"10", "d", "123"})
-	tw.append([]string{"11", "uvwxyz", "1"})
+	tw.append([]string{"3", "123", "abc"})
+	tw.append([]string{"10", "123", "d"})
+	tw.append([]string{"11", "1", "uvwxyz"})
 
 	var buf bytes.Buffer
 	tw.write(&buf)
 	want := `
-pid  name    ppid
-  3  abc      123
- 10  d        123
- 11  uvwxyz     1
+pid  ppid  name
+  3   123  abc
+ 10   123  d
+ 11     1  uvwxyz
 `
 	want = want[1:]
 	got := buf.String()

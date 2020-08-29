@@ -130,6 +130,7 @@ type process struct {
 	name    string
 	cmdline string
 	ppid    int32
+	pgid    int32
 	user    string
 }
 
@@ -202,6 +203,11 @@ func (l *lister) parseStat(p *process, path string) error {
 		switch col {
 		case 4: // ppid
 			p.ppid, err = parseInt32b(b)
+			if err != nil {
+				return err
+			}
+		case 5: // pgrp
+			p.pgid, err = parseInt32b(b)
 			if err != nil {
 				return err
 			}
@@ -294,10 +300,11 @@ type column uint
 
 const (
 	colPID column = 1 << iota
-	colName
-	colCmdline
 	colPPID
 	colUser
+	colName
+	colPGID
+	colCmdline
 	numCols
 )
 
@@ -308,10 +315,11 @@ type colConf struct {
 
 var colConfs = [...]colConf{
 	colPID:     {name: "pid"},
-	colName:    {name: "name", string: true},
-	colCmdline: {name: "cmdline", string: true},
 	colPPID:    {name: "ppid"},
 	colUser:    {name: "user", string: true},
+	colName:    {name: "name", string: true},
+	colPGID:    {name: "pgid"},
+	colCmdline: {name: "cmdline", string: true},
 }
 
 var colNames = make(map[string]column)
@@ -340,6 +348,7 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colPPID, p.ppid},
 		{colUser, p.user},
 		{colName, p.name},
+		{colPGID, p.pgid},
 		{colCmdline, p.cmdline},
 	} {
 		if cols.has(cell.col) {
@@ -414,7 +423,9 @@ func (tw *tableWriter) write(w io.Writer) {
 				io.WriteString(bw, cell)
 			} else {
 				io.WriteString(bw, cell)
-				io.WriteString(bw, strings.Repeat(" ", w-len(cell)))
+				if i < len(row)-1 {
+					io.WriteString(bw, strings.Repeat(" ", w-len(cell)))
+				}
 			}
 		}
 		io.WriteString(bw, "\n")
