@@ -82,7 +82,7 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 
 	f := new(filter)
 	if !*all {
-		f.thisPID = int32(os.Getpid())
+		f.thisPID = os.Getpid()
 		u, err := user.Current()
 		if err != nil {
 			log.Fatal(err)
@@ -157,12 +157,12 @@ func (l *lister) list() ([]*process, error) {
 }
 
 type process struct {
-	pid      int32
+	pid      int
 	name     string
 	cmdline  string
-	ppid     int32
-	pgid     int32
-	nthreads int64
+	ppid     int
+	pgid     int
+	nthreads int32
 	user     string
 }
 
@@ -171,7 +171,7 @@ var errNotAProcess = errors.New("/proc dir is not a pid")
 func (l *lister) loadProcess(fi os.FileInfo) (*process, error) {
 	var p process
 	var err error
-	p.pid, err = parseInt32(fi.Name())
+	p.pid, err = strconv.Atoi(fi.Name())
 	if err != nil {
 		return nil, errNotAProcess
 	}
@@ -234,17 +234,17 @@ func (l *lister) parseStat(p *process, path string) error {
 		stat = stat[i:]
 		switch col {
 		case 4: // ppid
-			p.ppid, err = parseInt32b(b)
+			p.ppid, err = parseIntb(b)
 			if err != nil {
 				return err
 			}
 		case 5: // pgrp
-			p.pgid, err = parseInt32b(b)
+			p.pgid, err = parseIntb(b)
 			if err != nil {
 				return err
 			}
 		case 20: // num_threads
-			p.nthreads, err = parseInt64b(b)
+			p.nthreads, err = parseInt32b(b)
 			if err != nil {
 				return err
 			}
@@ -286,6 +286,10 @@ func (l *lister) readAll(f *os.File) ([]byte, error) {
 	return ioutil.ReadAll(f)
 }
 
+func parseIntb(b []byte) (int, error) {
+	return strconv.Atoi(unsafeString(b))
+}
+
 func parseInt32(s string) (int32, error) {
 	n, err := strconv.ParseInt(s, 10, 32)
 	if err != nil {
@@ -295,19 +299,11 @@ func parseInt32(s string) (int32, error) {
 }
 
 func parseInt32b(b []byte) (int32, error) {
-	var s string
-	sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
-	sh.Data = (*reflect.SliceHeader)(unsafe.Pointer(&b)).Data
-	sh.Len = len(b)
-	return parseInt32(s)
+	return parseInt32(unsafeString(b))
 }
 
 func parseUint32b(b []byte) (uint32, error) {
-	var s string
-	sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
-	sh.Data = (*reflect.SliceHeader)(unsafe.Pointer(&b)).Data
-	sh.Len = len(b)
-	n, err := strconv.ParseUint(s, 10, 32)
+	n, err := strconv.ParseUint(unsafeString(b), 10, 32)
 	if err != nil {
 		return 0, err
 	}
@@ -315,15 +311,19 @@ func parseUint32b(b []byte) (uint32, error) {
 }
 
 func parseInt64b(b []byte) (int64, error) {
+	return strconv.ParseInt(unsafeString(b), 10, 64)
+}
+
+func unsafeString(b []byte) string {
 	var s string
 	sh := (*reflect.StringHeader)(unsafe.Pointer(&s))
 	sh.Data = (*reflect.SliceHeader)(unsafe.Pointer(&b)).Data
 	sh.Len = len(b)
-	return strconv.ParseInt(s, 10, 64)
+	return s
 }
 
 type filter struct {
-	thisPID int32          // don't include our own PID
+	thisPID int            // don't include our own PID
 	user    string         // only include this user
 	name    *regexp.Regexp // only include processes matching this name
 	cmd     *regexp.Regexp // only include processes matching this cmdline
