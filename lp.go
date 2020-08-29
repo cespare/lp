@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -476,22 +478,54 @@ const pad = "  "
 func (tw *tableWriter) write(w io.Writer) {
 	bw := bufio.NewWriter(w)
 	defer bw.Flush()
-	for _, row := range tw.cells {
-		for i, cell := range row {
-			if i > 0 {
-				io.WriteString(bw, pad)
+	trim := false
+	var b []byte
+	for i, row := range tw.cells {
+		b = b[:0]
+		for j, cell := range row {
+			if j > 0 {
+				b = append(b, pad...)
 			}
-			w := tw.widths[i]
-			if tw.opts[i]&rightAligned != 0 {
-				io.WriteString(bw, strings.Repeat(" ", w-len(cell)))
-				io.WriteString(bw, cell)
+			w := tw.widths[j]
+			if tw.opts[j]&rightAligned != 0 {
+				for k := len(cell); k < w; k++ {
+					b = append(b, ' ')
+				}
+				b = append(b, cell...)
 			} else {
-				io.WriteString(bw, cell)
-				if i < len(row)-1 {
-					io.WriteString(bw, strings.Repeat(" ", w-len(cell)))
+				b = append(b, cell...)
+				if j < len(row)-1 {
+					for k := len(cell); k < w; k++ {
+						b = append(b, ' ')
+					}
 				}
 			}
 		}
-		io.WriteString(bw, "\n")
+		// If we're writing to a terminal, trim very long lines.
+		// (These usually occur because we're emitting cmdline.)
+		// If we don't trim, it's hard to read the tabular output.
+		// First, decide whether to trim. If the terminal is so narrow
+		// (or the number of columns is so large) that we can't even
+		// print all the headers, then give up on trimming since the
+		// trimmed output will probably be too confusing if it doesn't
+		// include the requested columns.
+		if i == 0 {
+			trim = termWidth > 3 && len(b) < termWidth
+		}
+		if trim && len(b) > termWidth {
+			b = b[:termWidth-3]
+			b = append(b, "..."...)
+		}
+		b = append(b, '\n')
+		bw.Write(b)
+	}
+}
+
+// termWidth is the terminal width, or zero if stdout is not a terminal.
+var termWidth int
+
+func init() {
+	if ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ); err == nil {
+		termWidth = int(ws.Col)
 	}
 }

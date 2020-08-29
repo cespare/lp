@@ -2,7 +2,6 @@
 
 ## TODO (maybe)
 
-* Truncate long lines to terminal width
 * Running duration
 * capabilities
 * #FDs
