@@ -18,10 +18,21 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
+
+// #include <unistd.h>
+import "C"
+
+var clockTick time.Duration
+
+func init() {
+	clockTicksPerSec := C.sysconf(C._SC_CLK_TCK)
+	clockTick = time.Second / time.Duration(clockTicksPerSec)
+}
 
 func main() {
 	log.SetFlags(0)
@@ -120,6 +131,7 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 type lister struct {
 	buf    []byte
 	users  map[uint32]string
+	uptime time.Duration
 	filter *filter
 }
 
@@ -131,6 +143,11 @@ func newLister(f *filter) *lister {
 }
 
 func (l *lister) list() ([]*process, error) {
+	var err error
+	l.uptime, err = l.getUptime()
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open("/proc")
 	if err != nil {
 		return nil, err
@@ -156,12 +173,30 @@ func (l *lister) list() ([]*process, error) {
 	return ps, nil
 }
 
+func (l *lister) getUptime() (time.Duration, error) {
+	f, err := os.Open("/proc/uptime")
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	b, err := l.readAll(f)
+	if err != nil {
+		return 0, err
+	}
+	i := bytes.IndexByte(b, ' ')
+	if i < 0 {
+		return 0, errors.New("malformed /proc/uptime")
+	}
+	return time.ParseDuration(string(b[:i]) + "s")
+}
+
 type process struct {
 	pid      int
 	name     string
 	cmdline  string
 	ppid     int
 	pgid     int
+	uptime   time.Duration
 	nthreads int32
 	user     string
 }
@@ -248,6 +283,16 @@ func (l *lister) parseStat(p *process, path string) error {
 			if err != nil {
 				return err
 			}
+		case 22: // starttime
+			startTime, err := parseUint64b(b)
+			if err != nil {
+				return err
+			}
+			uptime := l.uptime - time.Duration(startTime)*clockTick
+			if uptime < 0 {
+				uptime = 0
+			}
+			p.uptime = uptime
 			// Done
 			return nil
 		}
@@ -302,16 +347,8 @@ func parseInt32b(b []byte) (int32, error) {
 	return parseInt32(unsafeString(b))
 }
 
-func parseUint32b(b []byte) (uint32, error) {
-	n, err := strconv.ParseUint(unsafeString(b), 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(n), nil
-}
-
-func parseInt64b(b []byte) (int64, error) {
-	return strconv.ParseInt(unsafeString(b), 10, 64)
+func parseUint64b(b []byte) (uint64, error) {
+	return strconv.ParseUint(unsafeString(b), 10, 64)
 }
 
 func unsafeString(b []byte) string {
@@ -353,48 +390,55 @@ const (
 	colUser
 	colName
 	colPGID
+	colUptime
 	colNThreads
 	colCmdline
 	numCols
 )
 
 type colConf struct {
-	name   string
-	desc   string
-	string bool
+	name       string
+	desc       string
+	rightAlign bool
 }
 
 var colConfs = map[column]colConf{
 	colPID: {
-		name: "pid",
-		desc: "Process ID",
+		name:       "pid",
+		desc:       "Process ID",
+		rightAlign: true,
 	},
 	colPPID: {
-		name: "ppid",
-		desc: "Parent process ID",
+		name:       "ppid",
+		desc:       "Parent process ID",
+		rightAlign: true,
 	},
 	colUser: {
-		name:   "user",
-		desc:   "Username of the process owner",
-		string: true,
+		name: "user",
+		desc: "Username of the process owner",
 	},
 	colName: {
-		name:   "name",
-		desc:   "Name of the command (as reported by /proc/[pid]/stat)",
-		string: true,
+		name: "name",
+		desc: "Name of the command (as reported by /proc/[pid]/stat)",
 	},
 	colPGID: {
-		name: "pgid",
-		desc: "Process group ID",
+		name:       "pgid",
+		desc:       "Process group ID",
+		rightAlign: true,
+	},
+	colUptime: {
+		name:       "uptime",
+		desc:       "How long the process has been running (wall time)",
+		rightAlign: true,
 	},
 	colNThreads: {
-		name: "nthreads",
-		desc: "Number of threads in the process",
+		name:       "nthreads",
+		desc:       "Number of threads in the process",
+		rightAlign: true,
 	},
 	colCmdline: {
-		name:   "cmdline",
-		desc:   "Command line for the process",
-		string: true,
+		name: "cmdline",
+		desc: "Command line for the process",
 	},
 }
 
@@ -434,11 +478,16 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colUser, p.user},
 		{colName, p.name},
 		{colPGID, p.pgid},
+		{colUptime, p.uptime},
 		{colNThreads, p.nthreads},
 		{colCmdline, p.cmdline},
 	} {
 		if cols.has(cell.col) {
-			cells = append(cells, fmt.Sprint(cell.v))
+			if d, ok := cell.v.(time.Duration); ok {
+				cells = append(cells, formatDuration(d))
+			} else {
+				cells = append(cells, fmt.Sprint(cell.v))
+			}
 		}
 	}
 	tw.append(cells)
@@ -447,7 +496,7 @@ func (p *process) write(tw *tableWriter, cols column) {
 type columnOpts uint
 
 const (
-	rightAligned columnOpts = 1 << iota
+	rightAlign columnOpts = 1 << iota
 )
 
 type tableWriter struct {
@@ -470,8 +519,8 @@ func newTableWriter(cols column) *tableWriter {
 		}
 		cc := colConfs[col]
 		var opts columnOpts
-		if !cc.string {
-			opts |= rightAligned
+		if cc.rightAlign {
+			opts |= rightAlign
 		}
 		tw.opts[i] = opts
 		tw.widths[i] = len(cc.name)
@@ -507,7 +556,7 @@ func (tw *tableWriter) write(w io.Writer) {
 				b = append(b, pad...)
 			}
 			w := tw.widths[j]
-			if tw.opts[j]&rightAligned != 0 {
+			if tw.opts[j]&rightAlign != 0 {
 				for k := len(cell); k < w; k++ {
 					b = append(b, ' ')
 				}
@@ -539,6 +588,49 @@ func (tw *tableWriter) write(w io.Writer) {
 		b = append(b, '\n')
 		bw.Write(b)
 	}
+}
+
+func formatDuration(d time.Duration) string {
+	var m time.Duration
+	switch {
+	case d < time.Microsecond:
+		m = time.Nanosecond
+	case d < 10*time.Microsecond:
+		m = 10 * time.Nanosecond
+	case d < 100*time.Microsecond:
+		m = 100 * time.Nanosecond
+	case d < time.Millisecond:
+		m = time.Microsecond
+	case d < 10*time.Millisecond:
+		m = 10 * time.Microsecond
+	case d < 100*time.Millisecond:
+		m = 100 * time.Microsecond
+	case d < time.Second:
+		m = time.Millisecond
+	case d < 10*time.Second:
+		m = 10 * time.Millisecond
+	case d < time.Minute:
+		m = 100 * time.Millisecond
+	case d < time.Hour:
+		m = time.Second
+	case d < 1000*time.Hour:
+		m = time.Minute
+	default:
+		m = time.Hour
+	}
+
+	// TODO: For uptime specifically, displaying "12345h" is probably not
+	// as useful as displaying a date. But getting a readable, compact
+	// display is tricky.
+
+	s := d.Round(m).String()
+	if m > time.Second {
+		s = strings.TrimSuffix(s, "0s")
+		if m > time.Minute {
+			s = strings.TrimSuffix(s, "0m")
+		}
+	}
+	return s
 }
 
 // termWidth is the terminal width, or zero if stdout is not a terminal.

@@ -2,7 +2,6 @@
 
 ## TODO (maybe)
 
-* Running duration
 * capabilities
 * #FDs
 * #of children/descendents

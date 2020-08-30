@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -18,6 +19,7 @@ func TestListerParseStat(t *testing.T) {
 	}
 
 	l := newLister(nil)
+	l.uptime = 10 * time.Minute
 	p := new(process)
 	if err := l.parseStat(p, statPath); err != nil {
 		t.Fatalf("parseStat: %s", err)
@@ -27,6 +29,7 @@ func TestListerParseStat(t *testing.T) {
 		name:     "panel-6-indicat",
 		ppid:     1837,
 		pgid:     1689,
+		uptime:   9*time.Minute + 40*time.Second + 290*time.Millisecond,
 		nthreads: 3,
 	}
 
@@ -83,5 +86,31 @@ pid  ppid  name
 	want = want[1:]
 	if got := buf.String(); got != want {
 		t.Errorf("got:\n\n%s\nwant:\n\n%s\n", got, want)
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want string
+	}{
+		{"145ns", "145ns"},
+		{"15.0009ms", "15ms"},
+		{"15.192ms", "15.2ms"},
+		{"58.1234001s", "58.1s"},
+		{"128.1234001s", "2m8s"},
+		{"1h10m33.111s", "1h11m"},
+		{"48h33s", "48h1m"},
+		{"1011h45m", "1012h"},
+	} {
+		d, err := time.ParseDuration(tt.in)
+		if err != nil {
+			t.Errorf("invalid input %q", tt.in)
+			continue
+		}
+		got := formatDuration(d)
+		if got != tt.want {
+			t.Errorf("formatDuration(%s): got %s; want %s", d, got, tt.want)
+		}
 	}
 }
