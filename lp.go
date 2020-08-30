@@ -86,13 +86,16 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 	}
 
 	f := new(filter)
+	needCols := cols
 	if !*all {
 		f.thisPID = os.Getpid()
+		needCols |= colPID
 		u, err := user.Current()
 		if err != nil {
 			log.Fatal(err)
 		}
 		f.user = u.Username
+		needCols |= colUser
 	}
 	if *nameRE != "" {
 		var err error
@@ -100,6 +103,7 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 		if err != nil {
 			log.Fatalln("Bad -name regexp:", err)
 		}
+		needCols |= colName
 	}
 	if *cmdRE != "" {
 		var err error
@@ -107,9 +111,10 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 		if err != nil {
 			log.Fatalln("Bad -cmd regexp:", err)
 		}
+		needCols |= colCmdline
 	}
 
-	l := newLister(f)
+	l := newLister(f, needCols)
 	ps, err := l.list()
 	if err != nil {
 		log.Fatal(err)
@@ -126,17 +131,19 @@ type lister struct {
 	clockTick time.Duration
 	pageSize  bytesize
 
-	buf    []byte
-	users  map[uint32]string
-	uptime time.Duration
-	filter *filter
+	needCols column
+	buf      []byte
+	users    map[uint32]string
+	uptime   time.Duration
+	filter   *filter
 }
 
-func newLister(f *filter) *lister {
+func newLister(f *filter, needCols column) *lister {
 	clockTicksPerSec := C.sysconf(C._SC_CLK_TCK)
 	return &lister{
 		clockTick: time.Second / time.Duration(clockTicksPerSec),
 		pageSize:  bytesize(os.Getpagesize()),
+		needCols:  needCols,
 		users:     make(map[uint32]string),
 		filter:    f,
 	}
@@ -204,6 +211,7 @@ type process struct {
 	cstime   time.Duration
 	cpuTime  time.Duration
 	nthreads int32
+	nfds     int64
 	user     string
 }
 
@@ -224,8 +232,15 @@ func (l *lister) loadProcess(fi os.FileInfo) (*process, error) {
 	if err := l.parseStat(&p, basePath+"/stat"); err != nil {
 		return nil, err
 	}
-	if err := l.parseCmdline(&p, basePath+"/cmdline"); err != nil {
-		return nil, err
+	if l.needCols.has(colCmdline) {
+		if err := l.parseCmdline(&p, basePath+"/cmdline"); err != nil {
+			return nil, err
+		}
+	}
+	if l.needCols.has(colNFDs) {
+		if err := l.parseFDs(&p, basePath+"/fd"); err != nil {
+			return nil, err
+		}
 	}
 
 	return &p, nil
@@ -352,6 +367,19 @@ func (l *lister) parseCmdline(p *process, path string) error {
 	return nil
 }
 
+func (l *lister) parseFDs(p *process, path string) error {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrPermission) {
+		p.nfds = -1
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	p.nfds, l.buf, err = direntCount(f, l.buf)
+	return err
+}
+
 // readAll attempts to use a single ReadAt to get the entire contents in a
 // single syscall and falls back to ioutil.ReadAll otherwise.
 func (l *lister) readAll(f *os.File) ([]byte, error) {
@@ -447,6 +475,7 @@ const (
 	colCstime
 	colCPUTime
 	colNThreads
+	colNFDs
 	colCmdline
 	numCols
 )
@@ -521,6 +550,11 @@ var colConfs = map[column]colConf{
 		desc:       "Number of threads in the process",
 		rightAlign: true,
 	},
+	colNFDs: {
+		name:       "nfds",
+		desc:       "Number of open file descriptors",
+		rightAlign: true,
+	},
 	colCmdline: {
 		name: "cmdline",
 		desc: "Command line for the process",
@@ -571,12 +605,20 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colCstime, p.cstime},
 		{colCPUTime, p.cpuTime},
 		{colNThreads, p.nthreads},
+		{colNFDs, p.nfds},
 		{colCmdline, p.cmdline},
 	} {
 		if cols.has(cell.col) {
-			if d, ok := cell.v.(time.Duration); ok {
-				cells = append(cells, formatDuration(d))
-			} else {
+			switch v := cell.v.(type) {
+			case time.Duration:
+				cells = append(cells, formatDuration(v))
+			case int64:
+				if v == -1 {
+					cells = append(cells, "?")
+				} else {
+					cells = append(cells, strconv.FormatInt(v, 10))
+				}
+			default:
 				cells = append(cells, fmt.Sprint(cell.v))
 			}
 		}
