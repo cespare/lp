@@ -32,11 +32,15 @@ func main() {
 	log.SetFlags(0)
 	var (
 		all      = flag.Bool("all", false, "List processes from all users, not just the current user")
-		nameRE   = flag.String("name", "", "Regular expression to match against process name")
-		cmdRE    = flag.String("cmd", "", "Regular expression to match against the cmdline")
 		full     = flag.Bool("full", false, "Shorthand for -cols 'pid,ppid,user,cmdline'")
 		colsFlag = flag.String("cols", "", "List of columns to display (comma-separated)")
 	)
+	var f filter
+	flag.Var(reFlag{&f.name}, "name", "Regular expression to match against process name")
+	flag.Var(reFlag{&f.cmd}, "cmd", "Regular expression to match against the cmdline")
+	flag.IntVar(&f.pid, "pid", 0, "Only list the process with this process ID")
+	flag.IntVar(&f.ppid, "ppid", 0, "Only list processes with this parent PID")
+	flag.IntVar(&f.pgid, "pgid", 0, "Only list processes with this process group ID")
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, `lp: list processes
 
@@ -54,7 +58,8 @@ and then each subsequent row corresponds to a process.
 
 By default, lp includes all processes belonging to the current user except for
 the lp process itself. With the -all flag, lp prints all processes for all users,
-including the lp process.
+including the lp process. Flags such as -pid, -name, and others filter down the
+results using other criteria.
 
 The default set of columns is just pid and process name. A larger set of
 commonly-used columns is enabled by using -full. The set of columns may be
@@ -85,7 +90,6 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 		cols = colPID | colName
 	}
 
-	f := new(filter)
 	needCols := cols
 	if !*all {
 		f.thisPID = os.Getpid()
@@ -97,24 +101,23 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 		f.user = u.Username
 		needCols |= colUser
 	}
-	if *nameRE != "" {
-		var err error
-		f.name, err = regexp.Compile(*nameRE)
-		if err != nil {
-			log.Fatalln("Bad -name regexp:", err)
-		}
+	if f.name != nil {
 		needCols |= colName
 	}
-	if *cmdRE != "" {
-		var err error
-		f.cmd, err = regexp.Compile(*cmdRE)
-		if err != nil {
-			log.Fatalln("Bad -cmd regexp:", err)
-		}
+	if f.cmd != nil {
 		needCols |= colCmdline
 	}
+	if f.pid != 0 {
+		needCols |= colPID
+	}
+	if f.ppid != 0 {
+		needCols |= colPPID
+	}
+	if f.pgid != 0 {
+		needCols |= colPGID
+	}
 
-	l := newLister(f, needCols)
+	l := newLister(&f, needCols)
 	ps, err := l.list()
 	if err != nil {
 		log.Fatal(err)
@@ -173,10 +176,19 @@ func (l *lister) list() ([]*process, error) {
 		if err != nil {
 			return nil, err
 		}
+		ps = append(ps, p)
+	}
+	if l.needCols.has(colNChild | colNDesc) {
+		fillChildDesc(ps)
+	}
+	i := 0
+	for _, p := range ps {
 		if l.filter.include(p) {
-			ps = append(ps, p)
+			ps[i] = p
+			i++
 		}
 	}
+	ps = ps[:i]
 	return ps, nil
 }
 
@@ -212,6 +224,8 @@ type process struct {
 	cpuTime  time.Duration
 	nthreads int32
 	nfds     int64
+	nchild   int64
+	ndesc    int64
 	user     string
 }
 
@@ -380,6 +394,31 @@ func (l *lister) parseFDs(p *process, path string) error {
 	return err
 }
 
+func fillChildDesc(ps []*process) {
+	byPID := make(map[int]*process)
+	for _, p := range ps {
+		byPID[p.pid] = p
+	}
+	for _, p := range ps {
+		if parent, ok := byPID[p.ppid]; ok {
+			parent.nchild++
+		}
+	}
+	rem := ps
+	for len(rem) > 0 {
+		var next []*process
+		for _, p := range rem {
+			parent, ok := byPID[p.ppid]
+			if !ok {
+				continue
+			}
+			parent.ndesc++
+			next = append(next, parent)
+		}
+		rem = next
+	}
+}
+
 // readAll attempts to use a single ReadAt to get the entire contents in a
 // single syscall and falls back to ioutil.ReadAll otherwise.
 func (l *lister) readAll(f *os.File) ([]byte, error) {
@@ -437,23 +476,33 @@ func unsafeString(b []byte) string {
 }
 
 type filter struct {
-	thisPID int            // don't include our own PID
-	user    string         // only include this user
-	name    *regexp.Regexp // only include processes matching this name
-	cmd     *regexp.Regexp // only include processes matching this cmdline
+	name *regexp.Regexp
+	cmd  *regexp.Regexp
+	pid  int
+	ppid int
+	pgid int
+
+	thisPID int    // don't include our own PID
+	user    string // only include this user
 }
 
 func (f *filter) include(p *process) bool {
-	if f.thisPID == p.pid {
+	switch {
+	case f.thisPID == p.pid:
 		return false
-	}
-	if f.user != "" && f.user != p.user {
+	case f.user != "" && f.user != p.user:
 		return false
-	}
-	if f.name != nil && !f.name.MatchString(p.name) {
+	case f.name != nil && !f.name.MatchString(p.name):
 		return false
-	}
-	if f.cmd != nil && !f.cmd.MatchString(p.cmdline) {
+	case f.cmd != nil && !f.cmd.MatchString(p.cmdline):
+		return false
+	case f.pid != 0 && f.pid != p.pid:
+		return false
+	case f.ppid != 0 && f.ppid != p.ppid:
+		return false
+	case f.ppid != 0 && f.ppid != p.ppid:
+		return false
+	case f.pgid != 0 && f.pgid != p.pgid:
 		return false
 	}
 	return true
@@ -476,6 +525,8 @@ const (
 	colCPUTime
 	colNThreads
 	colNFDs
+	colNChild
+	colNDesc
 	colCmdline
 	numCols
 )
@@ -555,6 +606,16 @@ var colConfs = map[column]colConf{
 		desc:       "Number of open file descriptors",
 		rightAlign: true,
 	},
+	colNChild: {
+		name:       "nchild",
+		desc:       "Number of child processes",
+		rightAlign: true,
+	},
+	colNDesc: {
+		name:       "ndesc",
+		desc:       "Number of descendent processes",
+		rightAlign: true,
+	},
 	colCmdline: {
 		name: "cmdline",
 		desc: "Command line for the process",
@@ -606,6 +667,8 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colCPUTime, p.cpuTime},
 		{colNThreads, p.nthreads},
 		{colNFDs, p.nfds},
+		{colNChild, p.nchild},
+		{colNDesc, p.ndesc},
 		{colCmdline, p.cmdline},
 	} {
 		if cols.has(cell.col) {
@@ -723,6 +786,26 @@ func (tw *tableWriter) write(w io.Writer) {
 		b = append(b, '\n')
 		bw.Write(b)
 	}
+}
+
+type reFlag struct {
+	p **regexp.Regexp
+}
+
+func (f reFlag) Set(s string) error {
+	re, err := regexp.Compile(s)
+	if err != nil {
+		return err
+	}
+	*f.p = re
+	return nil
+}
+
+func (f reFlag) String() string {
+	if f.p == nil || *f.p == nil {
+		return ""
+	}
+	return (*f.p).String()
 }
 
 type bytesize int64

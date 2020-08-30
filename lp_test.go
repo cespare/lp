@@ -42,7 +42,45 @@ func TestListerParseStat(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(p, want, cmp.AllowUnexported(process{})); diff != "" {
-		t.Errorf("parseStat gave incorrect output (-want,+got):\n%s", diff)
+		t.Errorf("parseStat gave incorrect output (-got,+want):\n%s", diff)
+	}
+}
+
+func TestFillChildDesc(t *testing.T) {
+	ps := []*process{
+		{pid: 1, ppid: 0},
+		{pid: 2, ppid: 1},
+		{pid: 5, ppid: 1},
+		{pid: 10, ppid: 5},
+		{pid: 11, ppid: 5},
+		{pid: 12, ppid: 5},
+		{pid: 13, ppid: 5},
+		{pid: 14, ppid: 13},
+		{pid: 15, ppid: 14},
+		{pid: 16, ppid: 15},
+		// The graph might be disconnected since we aren't looking at
+		// any kind of consistent snapshot.
+		{pid: 20, ppid: 19},
+		{pid: 21, ppid: 19},
+	}
+	fillChildDesc(ps)
+
+	want := []*process{
+		{pid: 1, ppid: 0, nchild: 2, ndesc: 9},
+		{pid: 2, ppid: 1, nchild: 0, ndesc: 0},
+		{pid: 5, ppid: 1, nchild: 4, ndesc: 7},
+		{pid: 10, ppid: 5, nchild: 0, ndesc: 0},
+		{pid: 11, ppid: 5, nchild: 0, ndesc: 0},
+		{pid: 12, ppid: 5, nchild: 0, ndesc: 0},
+		{pid: 13, ppid: 5, nchild: 1, ndesc: 3},
+		{pid: 14, ppid: 13, nchild: 1, ndesc: 2},
+		{pid: 15, ppid: 14, nchild: 1, ndesc: 1},
+		{pid: 16, ppid: 15, nchild: 0, ndesc: 0},
+		{pid: 20, ppid: 19, nchild: 0, ndesc: 0},
+		{pid: 21, ppid: 19, nchild: 0, ndesc: 0},
+	}
+	if diff := cmp.Diff(ps, want, cmp.AllowUnexported(process{})); diff != "" {
+		t.Errorf("fillChildDesc filled incorrectly (-got,+want):\n%s", diff)
 	}
 }
 
