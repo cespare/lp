@@ -198,6 +198,11 @@ type process struct {
 	pgid     int
 	rss      bytesize
 	uptime   time.Duration
+	utime    time.Duration
+	stime    time.Duration
+	cutime   time.Duration
+	cstime   time.Duration
+	cpuTime  time.Duration
 	nthreads int32
 	user     string
 }
@@ -279,6 +284,31 @@ func (l *lister) parseStat(p *process, path string) error {
 			if err != nil {
 				return err
 			}
+		case 14: // utime
+			utime, err := parseUint32b(b)
+			if err != nil {
+				return err
+			}
+			p.utime = time.Duration(utime) * l.clockTick
+		case 15: // stime
+			stime, err := parseUint32b(b)
+			if err != nil {
+				return err
+			}
+			p.stime = time.Duration(stime) * l.clockTick
+		case 16: // cutime
+			cutime, err := parseUint32b(b)
+			if err != nil {
+				return err
+			}
+			p.cutime = time.Duration(cutime) * l.clockTick
+		case 17: // cstime
+			cstime, err := parseUint32b(b)
+			if err != nil {
+				return err
+			}
+			p.cstime = time.Duration(cstime) * l.clockTick
+			p.cpuTime = p.utime + p.stime + p.cutime + p.cstime
 		case 20: // num_threads
 			p.nthreads, err = parseInt32b(b)
 			if err != nil {
@@ -354,6 +384,18 @@ func parseInt32b(b []byte) (int32, error) {
 	return parseInt32(unsafeString(b))
 }
 
+func parseUint32(s string) (uint32, error) {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(n), nil
+}
+
+func parseUint32b(b []byte) (uint32, error) {
+	return parseUint32(unsafeString(b))
+}
+
 func parseUint64b(b []byte) (uint64, error) {
 	return strconv.ParseUint(unsafeString(b), 10, 64)
 }
@@ -399,6 +441,11 @@ const (
 	colPGID
 	colRSS
 	colUptime
+	colUtime
+	colStime
+	colCutime
+	colCstime
+	colCPUTime
 	colNThreads
 	colCmdline
 	numCols
@@ -442,6 +489,31 @@ var colConfs = map[column]colConf{
 	colUptime: {
 		name:       "uptime",
 		desc:       "How long the process has been running (wall time)",
+		rightAlign: true,
+	},
+	colUtime: {
+		name:       "utime",
+		desc:       "Amount of time this process has been scheduled in user mode",
+		rightAlign: true,
+	},
+	colStime: {
+		name:       "stime",
+		desc:       "Amount of time this process has been scheduled in kernel mode",
+		rightAlign: true,
+	},
+	colCutime: {
+		name:       "cutime",
+		desc:       "Sum of utime for all descendents that were waited for and have exited",
+		rightAlign: true,
+	},
+	colCstime: {
+		name:       "cstime",
+		desc:       "Sum of stime for all descendents that were waited for and have exited",
+		rightAlign: true,
+	},
+	colCPUTime: {
+		name:       "cputime",
+		desc:       "Total CPU time as estimated by utime+stime+cutime+cstime",
 		rightAlign: true,
 	},
 	colNThreads: {
@@ -493,6 +565,11 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colPGID, p.pgid},
 		{colRSS, p.rss},
 		{colUptime, p.uptime},
+		{colUtime, p.utime},
+		{colStime, p.stime},
+		{colCutime, p.cutime},
+		{colCstime, p.cstime},
+		{colCPUTime, p.cpuTime},
 		{colNThreads, p.nthreads},
 		{colCmdline, p.cmdline},
 	} {
