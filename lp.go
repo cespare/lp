@@ -21,18 +21,12 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/dustin/go-humanize"
 	"golang.org/x/sys/unix"
 )
 
 // #include <unistd.h>
 import "C"
-
-var clockTick time.Duration
-
-func init() {
-	clockTicksPerSec := C.sysconf(C._SC_CLK_TCK)
-	clockTick = time.Second / time.Duration(clockTicksPerSec)
-}
 
 func main() {
 	log.SetFlags(0)
@@ -129,6 +123,9 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 }
 
 type lister struct {
+	clockTick time.Duration
+	pageSize  bytesize
+
 	buf    []byte
 	users  map[uint32]string
 	uptime time.Duration
@@ -136,9 +133,12 @@ type lister struct {
 }
 
 func newLister(f *filter) *lister {
+	clockTicksPerSec := C.sysconf(C._SC_CLK_TCK)
 	return &lister{
-		users:  make(map[uint32]string),
-		filter: f,
+		clockTick: time.Second / time.Duration(clockTicksPerSec),
+		pageSize:  bytesize(os.Getpagesize()),
+		users:     make(map[uint32]string),
+		filter:    f,
 	}
 }
 
@@ -196,6 +196,7 @@ type process struct {
 	cmdline  string
 	ppid     int
 	pgid     int
+	rss      bytesize
 	uptime   time.Duration
 	nthreads int32
 	user     string
@@ -288,11 +289,17 @@ func (l *lister) parseStat(p *process, path string) error {
 			if err != nil {
 				return err
 			}
-			uptime := l.uptime - time.Duration(startTime)*clockTick
+			uptime := l.uptime - time.Duration(startTime)*l.clockTick
 			if uptime < 0 {
 				uptime = 0
 			}
 			p.uptime = uptime
+		case 24: // rss
+			pages, err := parseInt32b(b)
+			if err != nil {
+				return err
+			}
+			p.rss = bytesize(pages) * l.pageSize
 			// Done
 			return nil
 		}
@@ -390,6 +397,7 @@ const (
 	colUser
 	colName
 	colPGID
+	colRSS
 	colUptime
 	colNThreads
 	colCmdline
@@ -424,6 +432,11 @@ var colConfs = map[column]colConf{
 	colPGID: {
 		name:       "pgid",
 		desc:       "Process group ID",
+		rightAlign: true,
+	},
+	colRSS: {
+		name:       "rss",
+		desc:       "Process resident set size (not including children)",
 		rightAlign: true,
 	},
 	colUptime: {
@@ -478,6 +491,7 @@ func (p *process) write(tw *tableWriter, cols column) {
 		{colUser, p.user},
 		{colName, p.name},
 		{colPGID, p.pgid},
+		{colRSS, p.rss},
 		{colUptime, p.uptime},
 		{colNThreads, p.nthreads},
 		{colCmdline, p.cmdline},
@@ -500,17 +514,19 @@ const (
 )
 
 type tableWriter struct {
-	opts   []columnOpts
-	widths []int
-	cells  [][]string
+	termWidth int
+	opts      []columnOpts
+	widths    []int
+	cells     [][]string
 }
 
 func newTableWriter(cols column) *tableWriter {
 	n := bits.OnesCount(uint(cols))
 	tw := &tableWriter{
-		opts:   make([]columnOpts, n),
-		widths: make([]int, n),
-		cells:  [][]string{make([]string, n)},
+		termWidth: termWidth(),
+		opts:      make([]columnOpts, n),
+		widths:    make([]int, n),
+		cells:     [][]string{make([]string, n)},
 	}
 	i := 0
 	for col := column(1); col < numCols; col <<= 1 {
@@ -579,15 +595,21 @@ func (tw *tableWriter) write(w io.Writer) {
 		// trimmed output will probably be too confusing if it doesn't
 		// include the requested columns.
 		if i == 0 {
-			trim = termWidth > 3 && len(b) < termWidth
+			trim = tw.termWidth > 3 && len(b) < tw.termWidth
 		}
-		if trim && len(b) > termWidth {
-			b = b[:termWidth-3]
+		if trim && len(b) > tw.termWidth {
+			b = b[:tw.termWidth-3]
 			b = append(b, "..."...)
 		}
 		b = append(b, '\n')
 		bw.Write(b)
 	}
+}
+
+type bytesize int64
+
+func (b bytesize) String() string {
+	return humanize.Bytes(uint64(b))
 }
 
 func formatDuration(d time.Duration) string {
@@ -633,11 +655,10 @@ func formatDuration(d time.Duration) string {
 	return s
 }
 
-// termWidth is the terminal width, or zero if stdout is not a terminal.
-var termWidth int
-
-func init() {
+// termWidth returns the terminal width or else 0 if stdout is not a terminal.
+func termWidth() int {
 	if ws, err := unix.IoctlGetWinsize(int(os.Stdout.Fd()), unix.TIOCGWINSZ); err == nil {
-		termWidth = int(ws.Col)
+		return int(ws.Col)
 	}
+	return 0
 }

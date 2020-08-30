@@ -19,6 +19,8 @@ func TestListerParseStat(t *testing.T) {
 	}
 
 	l := newLister(nil)
+	l.clockTick = 10 * time.Millisecond
+	l.pageSize = 4096
 	l.uptime = 10 * time.Minute
 	p := new(process)
 	if err := l.parseStat(p, statPath); err != nil {
@@ -29,6 +31,7 @@ func TestListerParseStat(t *testing.T) {
 		name:     "panel-6-indicat",
 		ppid:     1837,
 		pgid:     1689,
+		rss:      24694784,
 		uptime:   9*time.Minute + 40*time.Second + 290*time.Millisecond,
 		nthreads: 3,
 	}
@@ -39,10 +42,8 @@ func TestListerParseStat(t *testing.T) {
 }
 
 func TestTableWriter(t *testing.T) {
-	oldTermWidth := termWidth
-	t.Cleanup(func() { termWidth = oldTermWidth })
-
 	tw := newTableWriter(colPID | colName | colPPID)
+	tw.termWidth = 100
 	tw.append([]string{"3", "123", "abc"})
 	tw.append([]string{"10", "123", "d"})
 	tw.append([]string{"11", "1", "uvwxyz"})
@@ -61,7 +62,7 @@ pid  ppid  name
 	}
 
 	buf.Reset()
-	termWidth = 16
+	tw.termWidth = 16
 	tw.write(&buf)
 	want = `
 pid  ppid  name
@@ -75,7 +76,7 @@ pid  ppid  name
 	}
 
 	buf.Reset()
-	termWidth = 10 // Too small for trimming.
+	tw.termWidth = 10 // Too small for trimming.
 	tw.write(&buf)
 	want = `
 pid  ppid  name
