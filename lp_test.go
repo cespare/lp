@@ -85,7 +85,7 @@ func TestFillChildDesc(t *testing.T) {
 }
 
 func TestTableWriter(t *testing.T) {
-	tw := newTableWriter(colPID | colName | colPPID)
+	tw := newTableWriter(colPID|colName|colPPID, true)
 	tw.termWidth = 100
 	tw.append([]string{"3", "123", "abc"})
 	tw.append([]string{"10", "123", "d"})

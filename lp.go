@@ -34,6 +34,7 @@ func main() {
 		all      = flag.Bool("all", false, "List processes from all users, not just the current user")
 		full     = flag.Bool("full", false, "Shorthand for -cols 'pid,ppid,user,cmdline'")
 		colsFlag = flag.String("cols", "", "List of columns to display (comma-separated)")
+		only     = flag.String("only", "", "Display this single column alone (and no header)")
 	)
 	var f filter
 	flag.Var(reFlag{&f.name}, "name", "Regular expression to match against process name")
@@ -67,7 +68,10 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 
 `)
 		printAllColumns()
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprint(os.Stderr, `
+The -only flag selects a single column for display and suppresses the column header.
+This is useful for piping to other commands (e.g., lp -only pid ... | xargs kill).
+`)
 	}
 	flag.Parse()
 
@@ -75,17 +79,27 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 	switch {
 	case *colsFlag != "" && *full:
 		log.Fatal("-full and -cols are mutually exclusive")
+	case *colsFlag != "" && *only != "":
+		log.Fatal("-cols and -only are mutually exclusive")
+	case *only != "" && *full:
+		log.Fatal("-full and -only are mutually exclusive")
 	case *colsFlag != "":
 		for _, colName := range strings.Split(*colsFlag, ",") {
 			colName = strings.TrimSpace(colName)
 			col, ok := colNames[colName]
 			if !ok {
-				log.Fatalf("Unknown -col: %q", colName)
+				log.Fatalf("Unknown -col %q", colName)
 			}
 			cols |= col
 		}
 	case *full:
 		cols = colPID | colPPID | colUser | colCmdline
+	case *only != "":
+		col, ok := colNames[*only]
+		if !ok {
+			log.Fatalf("Unknown -only column %q", colName)
+		}
+		cols = col
 	default:
 		cols = colPID | colName
 	}
@@ -123,7 +137,7 @@ customized using -cols 'col1,col2,...'. The full set of available columns is:
 		log.Fatal(err)
 	}
 
-	tw := newTableWriter(cols)
+	tw := newTableWriter(cols, *only == "")
 	defer tw.write(os.Stdout)
 	for _, p := range ps {
 		p.write(tw, cols)
@@ -171,6 +185,11 @@ func (l *lister) list() ([]*process, error) {
 	for _, fi := range fis {
 		p, err := l.loadProcess(fi)
 		if err == errNotAProcess {
+			continue
+		}
+		// The pseudo-files could could disappear as we're trying to
+		// read them if the process exits.
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -702,13 +721,15 @@ type tableWriter struct {
 	cells     [][]string
 }
 
-func newTableWriter(cols column) *tableWriter {
+func newTableWriter(cols column, includeHeaders bool) *tableWriter {
 	n := bits.OnesCount(uint(cols))
 	tw := &tableWriter{
 		termWidth: termWidth(),
 		opts:      make([]columnOpts, n),
 		widths:    make([]int, n),
-		cells:     [][]string{make([]string, n)},
+	}
+	if includeHeaders {
+		tw.cells = append(tw.cells, make([]string, n))
 	}
 	i := 0
 	for col := column(1); col < numCols; col <<= 1 {
@@ -722,7 +743,9 @@ func newTableWriter(cols column) *tableWriter {
 		}
 		tw.opts[i] = opts
 		tw.widths[i] = len(cc.name)
-		tw.cells[0][i] = cc.name
+		if includeHeaders {
+			tw.cells[0][i] = cc.name
+		}
 		i++
 	}
 	return tw
