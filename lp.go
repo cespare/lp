@@ -17,10 +17,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 	"unsafe"
 
+	"github.com/cespare/tabular"
 	"github.com/dustin/go-humanize"
 	"golang.org/x/sys/unix"
 )
@@ -642,12 +642,12 @@ var colConfs = map[column]colConf{
 }
 
 func printAllColumns() {
-	tw := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	tb := tabular.New(tabular.Options{Padding: 2, PadChar: ' '})
 	for col := column(1); col < numCols; col <<= 1 {
 		cc := colConfs[col]
-		fmt.Fprintf(tw, "  %s\t%s\t\n", cc.name, cc.desc)
+		tb.AddRow("  "+cc.name, cc.desc)
 	}
-	tw.Flush()
+	tb.WriteTo(os.Stderr)
 }
 
 var colNames = make(map[string]column)
